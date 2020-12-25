@@ -28,22 +28,22 @@ type keyMap struct {
 // fillKeyMap is a helper for Reindex that fills in a keyMap given the
 // list of old keys to map from.  The cache MUST be locked upon entry
 // to this method.
-func (fc *FCache) fillKeyMap(obj interface{}, old []Key) (map[interface{}]*keyMap, error) {
+func (fc *FCache) fillKeyMap(ent *entry) (map[interface{}]*keyMap, error) {
 	indexes := map[interface{}]*keyMap{}
-	for _, k := range old {
+	for _, k := range ent.content.Keys {
 		// Make sure it's a defined index
 		idx, ok := fc.indexes[k.Index]
 		if !ok {
-			return nil, ErrBadIndex
+			continue
 		}
 
 		// Filter out duplications
 		if _, ok := indexes[k.Index]; ok {
-			return nil, ErrIncongruentKeys
+			continue
 		}
 
 		// Make sure it's this entry that's there
-		if ent, ok := idx.entries[k.Key]; !ok || ent.content == nil || ent.content.Object != obj {
+		if tmp, ok := idx.entries[k.Key]; !ok || ent != tmp {
 			return nil, ErrEntryNotFound
 		}
 
@@ -84,60 +84,88 @@ func (fc *FCache) finishKeyMap(indexes map[interface{}]*keyMap, new []Key) error
 
 // remap is a helper that applies the finalized key map to the cache.
 // The cache MUST be locked upon entry to this method.
-func (fc *FCache) remap(indexes map[interface{}]*keyMap, ent *Entry) {
-	newEnt := &entry{
-		content: ent,
-	}
+func (fc *FCache) remap(indexes map[interface{}]*keyMap, ent *entry) {
+	keys := make([]Key, len(ent.content.Keys))
 
-	// Scan through the indexes
-	for _, km := range indexes {
+	// Step through the existing keys
+	for i, k := range ent.content.Keys {
+		// Handle unmutated key
+		km, ok := indexes[k.Index]
+		if !ok {
+			keys[i] = k
+			continue
+		}
+
+		// OK, construct the new key
+		keys[i] = Key{
+			Index: k.Index,
+			Key:   km.new,
+		}
+
 		// Delete the old entry
 		delete(km.idx.entries, km.old)
 
 		// Check for a squatter
 		e, ok := km.idx.entries[km.new]
 		if ok {
-			// OK, check if we can complete the
-			// squatter...
+			// Try to complete the squatter
 			if e.content == nil {
-				e.complete(ent)
+				defer e.complete(ent.content)
 				continue
 			}
 
-			// Evict the old entry
+			// OK, have to evict the old entry
 			fc.evict(e.content.Keys)
 		}
 
 		// Replace with the new entry
-		km.idx.entries[km.new] = newEnt
+		km.idx.entries[km.new] = ent
 	}
+
+	// Update the entry keys
+	ent.content.Keys = keys
 }
 
-// Reindex reindexes an object in the cache.  It should be passed the
-// object in question and the lists of old and new cache keys; these
-// key lists MUST be complete.
-func (fc *FCache) Reindex(obj interface{}, old []Key, new []Key) error {
+// Reindex reindexes an existing entry in the cache--that is, it
+// changes the set of old keys to a set of new keys.  It should be
+// passed the list of new keys and appropriate options to find the
+// object to reindex in the cache.
+func (fc *FCache) Reindex(newKeys []Key, opts ...LookupOption) error {
+	// Process the options
+	o, err := procLookupOpts(opts)
+	if err != nil {
+		return err
+	}
+
 	// Lock the cache
 	fc.Lock()
 	defer fc.Unlock()
 
-	// Make sure the old and new key lists are congruent
-	if len(old) != len(new) {
-		return ErrIncongruentKeys
+	// Look for the index of the primary key
+	idx, ok := fc.indexes[o.key.Index]
+	if !ok {
+		return ErrBadIndex
 	}
-	indexes, err := fc.fillKeyMap(obj, old)
+
+	// Find the existing entry
+	ent, ok := idx.entries[o.key.Key]
+	if !ok || ent.content == nil {
+		return ErrNotCached
+	}
+
+	// Construct the initial keymap
+	indexes, err := fc.fillKeyMap(ent)
 	if err != nil {
 		return err
 	}
-	if err = fc.finishKeyMap(indexes, new); err != nil {
+
+	// Finish the keymap construction
+	if err = fc.finishKeyMap(indexes, newKeys); err != nil {
 		return err
 	}
 
-	// Now remap
-	fc.remap(indexes, &Entry{
-		Object: obj,
-		Keys:   new,
-	})
+	// Perform the remap
+	fc.remap(indexes, ent)
 
 	return nil
 }

@@ -45,7 +45,9 @@ type Entry struct {
 	Keys   []Key       // A list of keys associated with the object
 }
 
-// Index describes an index.
+// Index describes an index.  At least one of these structures must be
+// passed to New to construct an FCache object.  Each Index must have
+// both the index key and the factory function.
 type Index struct {
 	Index   interface{} // Key describing the index
 	Factory Factory     // The factory function for the index
@@ -82,29 +84,26 @@ func newEntry() (*entry, context.Context) {
 // specific requests.
 var reqCounter uint64
 
-// request adds a request to the entry and returns a result channel to
-// monitor, as well as a cookie that may be used to cancel the request
-// if desired.
-func (e *entry) request() (<-chan Entry, uint64) {
-	// Make the result channel, such that it won't block
-	resultChan := make(chan Entry, 1)
-
-	// Allocate a cookie
-	cookie := atomic.AddUint64(&reqCounter, 1)
-
-	// Add request to the entry
-	if e.reqs == nil {
-		e.reqs = map[uint64]chan<- Entry{}
+// makeFuture constructs a Future from the entry.
+func (e *entry) makeFuture(fc *FCache) *Future {
+	// Make a channel if we're not completed
+	var resultChan chan Entry
+	var cookie uint64
+	if e.content == nil {
+		resultChan = make(chan Entry, 1)
+		cookie = atomic.AddUint64(&reqCounter, 1)
+		if e.reqs == nil {
+			e.reqs = map[uint64]chan<- Entry{}
+		}
+		e.reqs[cookie] = resultChan
 	}
-	e.reqs[cookie] = resultChan
 
-	return resultChan, cookie
-}
-
-// cancelReq cancels a waiting request.  Note that this does not
-// cancel any outstanding calls to Factory functions.
-func (e *entry) cancelReq(cookie uint64) {
-	delete(e.reqs, cookie)
+	return &Future{
+		fc:     fc,
+		ent:    e,
+		result: resultChan,
+		cookie: cookie,
+	}
 }
 
 // complete updates the entry with the proper contents.  It returns a

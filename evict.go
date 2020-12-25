@@ -34,13 +34,13 @@ func (fc *FCache) evict(keys []Key) {
 
 // Evict removes a specific entry in the cache.  The options specify
 // which entry to evict.
-func (fc *FCache) Evict(opts ...Option) error {
+func (fc *FCache) Evict(opts ...LookupOption) error {
 	// Lock the cache
 	fc.Lock()
 	defer fc.Unlock()
 
 	// Process the options
-	o, err := procOpts(opts)
+	o, err := procLookupOpts(opts)
 	if err != nil {
 		return err
 	}

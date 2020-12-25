@@ -16,31 +16,9 @@ package fcache
 
 import "context"
 
-// entryWait is a helper that simply waits on an entry.  This function
-// MUST NOT be called with the cache locked.
-func entryWait(ctx context.Context, ent *entry, resultChan <-chan Entry, cookie uint64) Entry {
-	// Ensure we have a context
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	// Allow canceling from the context
-	select {
-	case result := <-resultChan:
-		return result
-
-	case <-ctx.Done():
-		ent.cancelReq(cookie)
-		return Entry{
-			Error: ctx.Err(),
-		}
-	}
-}
-
 // manufacture calls the index factory function.  It MUST be called as
-// a goroutine, and the mutex MUST NOT be locked.  It will invoke the
-// factory, then lock the mutex and complete the appropriate entry or
-// entries in the cache.
+// a goroutine.  It will invoke the factory, then lock the mutex and
+// complete the appropriate entry or entries in the cache.
 func (fc *FCache) manufacture(ctx context.Context, key Key, factory Factory) {
 	// Invoke the factory
 	ent := factory(ctx, key)
@@ -55,7 +33,7 @@ func (fc *FCache) manufacture(ctx context.Context, key Key, factory Factory) {
 
 // insert inserts the entry into the cache, constructing index entries
 // as required.  The cache MUST be locked upon entry to this method.
-func (fc *FCache) insert(ent *Entry) {
+func (fc *FCache) insert(ent *Entry) *entry {
 	// Pre-create the entry, if appropriate
 	var newE *entry
 	if ent.Error == nil || IsPermanent(ent.Error) {
@@ -81,42 +59,35 @@ func (fc *FCache) insert(ent *Entry) {
 			idx.entries[k.Key] = newE
 		}
 	}
+
+	return newE
 }
 
-// Lookup looks up an entry in the cache.  The options specify which
-// entry to look up.  The desired entry is returned, or the factory
-// function invoked to construct it.
-func (fc *FCache) Lookup(opts ...Option) (interface{}, error) {
+// lookup looks up an entry in the cache and returns a Future.  The
+// Lookup and LookupFuture methods use lookup to perform the actual
+// lookup.
+func (fc *FCache) lookup(o lookupOptions) (*Future, error) {
 	// Lock the cache
 	fc.Lock()
-
-	// Process the options
-	o, err := procOpts(opts)
-	if err != nil {
-		fc.Unlock()
-		return nil, err
-	}
+	defer fc.Unlock()
 
 	// Look for the index
 	idx, ok := fc.indexes[o.key.Index]
 	if !ok {
-		fc.Unlock()
 		return nil, ErrBadIndex
 	}
 
-	// Find an existing entry
+	// Find an existing entry, constructing it if needed
 	ent, ok := idx.entries[o.key.Key]
 	if !ok {
-		// Not present; insert entry if we were passed one
+		// Not present; insert entry if one was passed
 		if o.ent != nil {
-			fc.insert(o.ent)
-			fc.Unlock()
-			return o.ent.Object, o.ent.Error
+			e := fc.insert(o.ent)
+			return e.makeFuture(fc), nil
 		}
 
 		// Only searching the cache?
 		if o.only {
-			fc.Unlock()
 			return nil, ErrNotCached
 		}
 
@@ -125,25 +96,55 @@ func (fc *FCache) Lookup(opts ...Option) (interface{}, error) {
 		ent, ctx = newEntry()
 		idx.entries[o.key.Key] = ent
 
-		// Make sure to run the factory
+		// Manufacture the entry
 		go fc.manufacture(ctx, *o.key, idx.factory)
 	}
 
-	// If it's complete, return it
-	if ent.content != nil {
-		defer fc.Unlock()
-		return ent.content.Object, ent.content.Error
-	}
-
-	// If we're only searching the cache, stop here
-	if o.only {
-		fc.Unlock()
+	// If the entry is incomplete and we're only searching the
+	// cache, stop here
+	if ent.content == nil && o.only {
 		return nil, ErrNotCached
 	}
 
-	// Wait on the entry
-	resultChan, cookie := ent.request()
-	fc.Unlock()
-	content := entryWait(o.ctx, ent, resultChan, cookie)
-	return content.Object, content.Error
+	// Construct and return a future
+	return ent.makeFuture(fc), nil
+}
+
+// Lookup looks up an entry in the cache and returns it.  The options
+// specify which entry to look up.  If necessary, the index factory
+// function will be invoked to construct the entry.  This method waits
+// for the object to be constructed, unless the SearchCache option is
+// provided; use LookupFuture to instead return a Future.
+func (fc *FCache) Lookup(opts ...LookupOption) (interface{}, error) {
+	// Process the options
+	o, err := procLookupOpts(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Perform the lookup
+	f, err := fc.lookup(o)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wait on the future
+	defer f.Cancel()
+	return f.WaitWithContext(o.ctx)
+}
+
+// LookupFuture looks up an entry in the cache and returns a Future,
+// which is a promise to provide the details of the entry lookup at a
+// future date.  The options specify which entry to look up.  If
+// necessary, the index factory function will be invoked to construct
+// the entry.
+func (fc *FCache) LookupFuture(opts ...LookupOption) (*Future, error) {
+	// Process the options
+	o, err := procLookupOpts(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Perform the lookup and return the future
+	return fc.lookup(o)
 }

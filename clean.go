@@ -16,23 +16,16 @@ package fcache
 
 import "context"
 
-// CleanFlags is a set of bit flags that may be passed to FCache.Clean to indicate what should be cleaned from the cache.
-type CleanFlags uint8
-
-// Valid flags for CleanFlags.
-const (
-	CleanObjects CleanFlags = 1 << iota // Clean objects from cache
-	CleanErrors                         // Clean cached errors
-	CleanPending                        // Clean pending requests and cancel them
-)
-
 // Clean is used to clean things out of the cache.  The specific
-// things to clean up are specified through the CleanFlags bitmask
-// that is passed in.
-func (fc *FCache) Clean(flags CleanFlags) {
+// things to clean up are specified through the options passed in; if
+// no options are passed in, the cache will be completely cleared.
+func (fc *FCache) Clean(opts ...CleanOption) {
 	// Lock the cache
 	fc.Lock()
 	defer fc.Unlock()
+
+	// Process the options
+	o := procCleanOpts(opts)
 
 	// Clear the desired objects
 	for _, idx := range fc.indexes {
@@ -40,15 +33,15 @@ func (fc *FCache) Clean(flags CleanFlags) {
 		toRemove := []interface{}{}
 		for key, ent := range idx.entries {
 			if ent.content == nil {
-				if (flags & CleanPending) != 0 {
+				if o.pending {
 					ent.complete(&Entry{
 						Error: context.Canceled,
 					})
 					toRemove = append(toRemove, key)
 				}
-			} else if (flags&CleanObjects) != 0 && ent.content.Object != nil {
+			} else if o.objects && ent.content.Object != nil {
 				toRemove = append(toRemove, key)
-			} else if (flags&CleanErrors) != 0 && ent.content.Error != nil {
+			} else if o.errors && ent.content.Error != nil {
 				toRemove = append(toRemove, key)
 			}
 		}

@@ -29,10 +29,13 @@ type FCache struct {
 	indexes map[interface{}]index // The cache indexes
 }
 
-// New constructs a new FCache object and returns it.
+// New constructs a new FCache object and returns it.  At least one
+// Index must be passed, and all indexes must define both the index
+// key and the factory function to call when the requested entry does
+// not exist in the cache.
 func New(indexes ...Index) (*FCache, error) {
 	// Make sure we have at least one index
-	if len(indexes) <= 1 {
+	if len(indexes) < 1 {
 		return nil, ErrMissingIndex
 	}
 

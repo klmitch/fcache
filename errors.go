@@ -26,6 +26,7 @@ var (
 	ErrNotCached       = errors.New("key does not exist in cache")
 	ErrIncongruentKeys = errors.New("old keys are not congruent with new keys")
 	ErrEntryNotFound   = errors.New("entry not found with specified key")
+	ErrFutureCanceled  = errors.New("cannot wait on canceled future")
 )
 
 // PermanentError is an implementation of the error interface that
