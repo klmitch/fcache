@@ -61,6 +61,7 @@ func (f *Future) WaitWithContext(ctx context.Context) (interface{}, error) {
 	if f.result != nil {
 		// If the result is empty, the channel has been closed
 		if ent := f.wait(ctx); ent.Object != nil || ent.Error != nil {
+			f.result = nil
 			return ent.Object, ent.Error
 		}
 	}
