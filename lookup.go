@@ -55,7 +55,7 @@ func (fc *FCache) insert(ent *Entry) *entry {
 			if e.complete(ent) {
 				delete(idx.entries, k.Key)
 			}
-		} else if ent != nil {
+		} else if newE != nil {
 			idx.entries[k.Key] = newE
 		}
 	}
