@@ -25,9 +25,9 @@ type keyMap struct {
 	detect bool        // Used to detect incongruent keys
 }
 
-// fillKeyMap is a helper for Reindex that fills in a keyMap given the
-// list of old keys to map from.  The cache MUST be locked upon entry
-// to this method.
+// fillKeyMap is a helper for Reindex that fills in the "old" side of
+// the keyMap given the existing cache entry.  The cache MUST be
+// locked upon entry to this method.
 func (fc *FCache) fillKeyMap(ent *entry) (map[interface{}]*keyMap, error) {
 	indexes := map[interface{}]*keyMap{}
 	for _, k := range ent.content.Keys {
@@ -43,7 +43,7 @@ func (fc *FCache) fillKeyMap(ent *entry) (map[interface{}]*keyMap, error) {
 		}
 
 		// Make sure it's this entry that's there
-		if tmp, ok := idx.entries[k.Key]; !ok || ent != tmp {
+		if tmp, ok := idx.entries[k.Key]; !ok || !reflect.DeepEqual(ent.content, tmp.content) {
 			return nil, ErrEntryNotFound
 		}
 
@@ -58,7 +58,7 @@ func (fc *FCache) fillKeyMap(ent *entry) (map[interface{}]*keyMap, error) {
 }
 
 // finishKeyMap completes the work of fillKeyMap by walking through
-// the set of new keys, detecting duplications and handling them
+// the list of new keys, detecting duplications and handling them
 // appropriately.  The cache MUST be locked upon entry to this method.
 func (fc *FCache) finishKeyMap(indexes map[interface{}]*keyMap, new []Key) error {
 	for _, k := range new {
